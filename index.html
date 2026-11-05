@@ -1,0 +1,259 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Privacy Receipt Calculator</title>
+<meta name="description" content="How a per-record differential-privacy budget translates into a per-patient bound when one person contributes k longitudinal MRI sessions.">
+<style>
+/* Layout: a two-column worksheet — inputs on the left, a printed receipt on the right; the chart spans below. */
+:root {
+  --bg: #eef2f3;
+  --surface: #ffffff;
+  --paper: #fbfcfc;
+  --ink: #14202b;
+  --muted: #56646f;
+  --rule: #d3dbdf;
+  --accent: #0e7c86;
+  --accent-soft: rgba(14,124,134,.12);
+  --warn: #c2410c;
+  --warn-soft: rgba(194,65,12,.10);
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1619; --surface: #162024; --paper: #1b272c; --ink: #e4ecef; --muted: #9aabb3;
+    --rule: #2c3b42; --accent: #3fb8c2; --accent-soft: rgba(63,184,194,.16); --warn: #f08a5d; --warn-soft: rgba(240,138,93,.14);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1619; --surface: #162024; --paper: #1b272c; --ink: #e4ecef; --muted: #9aabb3;
+  --rule: #2c3b42; --accent: #3fb8c2; --accent-soft: rgba(63,184,194,.16); --warn: #f08a5d; --warn-soft: rgba(240,138,93,.14);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { color-scheme: light; }
+body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.5; }
+.wrap { max-width: 1040px; margin: 0 auto; padding-block: 32px 48px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 24px; }
+header h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 8px; text-wrap: balance; letter-spacing: -.01em; }
+header p { margin: 0; color: var(--muted); max-width: 68ch; }
+.eyebrow { font-family: var(--font-mono); font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin-bottom: 6px; }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+@media (max-width: 760px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 20px; display: grid; gap: 18px; min-width: 0; }
+.panel h2 { font-size: 1.05rem; margin: 0; }
+.field { display: grid; gap: 6px; }
+.field label { font-weight: 700; font-size: .95rem; display: flex; justify-content: space-between; gap: 12px; }
+.field label output { font-family: var(--font-mono); font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
+.field small { color: var(--muted); font-size: .82rem; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+input[type=range]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.k-field { padding: 14px; border-radius: 8px; background: var(--accent-soft); }
+.steps { font-family: var(--font-mono); font-size: .82rem; color: var(--muted); border-top: 1px dashed var(--rule); padding-top: 12px; }
+
+/* The receipt */
+.receipt { background: var(--paper); font-family: var(--font-mono); font-size: .86rem; padding: 22px 20px 26px; border: 1px solid var(--rule); position: relative; min-width: 0;
+  -webkit-mask: radial-gradient(circle 6px at 50% 0, transparent 98%, #000) 0 0 / 16px 100% repeat-x, linear-gradient(#000, #000);
+  -webkit-mask-composite: source-in; mask-composite: intersect; }
+.receipt::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 10px;
+  background: linear-gradient(-45deg, var(--bg) 5px, transparent 0), linear-gradient(45deg, var(--bg) 5px, transparent 0); background-size: 10px 10px; background-position: left bottom; }
+.receipt h2 { font-family: var(--font-mono); font-size: .9rem; text-align: center; letter-spacing: .12em; margin: 0 0 4px; }
+.receipt .sub { text-align: center; color: var(--muted); font-size: .76rem; margin-bottom: 14px; }
+.line { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-variant-numeric: tabular-nums; }
+.line span:first-child { color: var(--muted); }
+.line b { font-weight: 600; text-align: right; white-space: nowrap; }
+.sep { border-top: 1px dashed var(--rule); margin: 10px 0; }
+.total { font-size: 1rem; }
+.total b.warn { color: var(--warn); }
+.total b.ok { color: var(--accent); }
+.note { color: var(--muted); font-size: .76rem; margin-top: 12px; line-height: 1.45; }
+
+/* Chart */
+.chart-panel { gap: 10px; }
+.chart-wrap { overflow-x: auto; }
+svg text { font-family: var(--font-mono); }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: .85rem; color: var(--muted); }
+.legend i { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
+.explain { display: grid; gap: 10px; color: var(--ink); max-width: 72ch; }
+.explain p { margin: 0; }
+.explain code { font-family: var(--font-mono); font-size: .88em; }
+footer { color: var(--muted); font-size: .82rem; }
+footer a { color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Preliminary work · digital health twin privacy</div>
+    <h1>What does a stated privacy budget mean for a patient with many scans?</h1>
+    <p>A model trained with DP-SGD states one privacy budget ε per record. A patient whose twin holds k MRI sessions contributes k records. This calculator prints that patient's receipt: the stated budget, the worst-case bound for all k sessions together, and the budget under user-level training.</p>
+  </header>
+
+  <div class="grid">
+    <section class="panel" aria-labelledby="in-h">
+      <h2 id="in-h">Training settings</h2>
+      <div class="field k-field">
+        <label for="k">Your MRI sessions in the training set <output id="k-out">4</output></label>
+        <input id="k" type="range" min="1" max="16" step="1" value="4">
+        <small>A glioblastoma patient followed for two years can easily have 8 or more.</small>
+      </div>
+      <div class="field">
+        <label for="q">Sampling rate per step <output id="q-out">1.0%</output></label>
+        <input id="q" type="range" min="0.1" max="5" step="0.1" value="1">
+        <small>Batch size divided by the number of records.</small>
+      </div>
+      <div class="field">
+        <label for="sigma">Noise multiplier σ <output id="sigma-out">1.00</output></label>
+        <input id="sigma" type="range" min="0.5" max="4" step="0.05" value="1">
+      </div>
+      <div class="field">
+        <label for="epochs">Epochs <output id="epochs-out">30</output></label>
+        <input id="epochs" type="range" min="1" max="100" step="1" value="30">
+      </div>
+      <div class="field">
+        <label for="delta">δ <output id="delta-out">1e-5</output></label>
+        <input id="delta" type="range" min="4" max="8" step="1" value="5">
+        <small>Failure probability; usually below one over the number of people.</small>
+      </div>
+      <div class="steps" id="steps">3,000 training steps</div>
+    </section>
+
+    <section class="receipt" aria-labelledby="r-h" aria-live="polite">
+      <h2 id="r-h">PRIVACY RECEIPT</h2>
+      <div class="sub">one person · <span id="r-k">4</span> sessions · DP-SGD</div>
+      <div class="line"><span>Stated budget, per record</span><b id="r-rec">ε = 3.51</b></div>
+      <div class="line"><span>Attack ceiling at 1% FPR</span><b id="r-rec-tpr">33%</b></div>
+      <div class="sep"></div>
+      <div class="line"><span>Your sessions</span><b id="r-k2">× 4</b></div>
+      <div class="line"><span>Chance you appear in a step</span><b id="r-p">3.9%</b></div>
+      <div class="line"><span>Effective noise on you</span><b id="r-seff">σ/k = 0.25</b></div>
+      <div class="sep"></div>
+      <div class="line total"><span>Your bound, record-level training</span><b id="r-person" class="warn">ε ≤ 28,607</b></div>
+      <div class="line"><span>Attack ceiling at 1% FPR</span><b id="r-person-tpr">100%</b></div>
+      <div class="sep"></div>
+      <div class="line total"><span>Your budget, user-level training</span><b id="r-user" class="ok">ε = 3.51</b></div>
+      <div class="line"><span>Attack ceiling at 1% FPR</span><b id="r-user-tpr">33%</b></div>
+      <p class="note">Bounds are upper limits from Rényi-DP accounting (validated against Google's dp-accounting). The real leakage for you lies somewhere between the stated budget and your bound. Measuring where is what the per-person audit in this project does.</p>
+    </section>
+  </div>
+
+  <section class="panel chart-panel" aria-labelledby="c-h">
+    <h2 id="c-h">How the bound grows with the number of sessions</h2>
+    <div class="legend">
+      <span><i style="background: var(--warn)"></i>Your bound, record-level training</span>
+      <span><i style="background: var(--accent)"></i>Stated and user-level budget</span>
+    </div>
+    <div class="chart-wrap"><svg id="chart" viewBox="0 0 760 300" width="100%" role="img" aria-label="Privacy bound by number of sessions"></svg></div>
+  </section>
+
+  <section class="explain">
+    <p><b>Why the bound grows so fast.</b> In each step, record-level DP-SGD clips each record's gradient to norm C and adds noise of scale σC. If all k of your sessions land in one batch and their gradients point the same way, your total influence is kC against the same noise. Sessions of one brain share the anatomy, so aligned gradients are a realistic worst case, not a far-fetched one.</p>
+    <p><b>How the bound is computed.</b> You are included in a step with probability <code>p = 1 − (1 − q)^k</code>. Your contribution is then bounded by a Gaussian with noise multiplier <code>σ/k</code>. The calculator runs the standard RDP accountant for the subsampled Gaussian on <code>(p, σ/k)</code>, over integer orders 2 to 512, and converts to (ε, δ). The attack ceiling is the most a membership test can achieve at a 1% false-positive rate: <code>min(1, e^ε · 0.01 + δ)</code>.</p>
+    <p><b>What user-level training changes.</b> It samples and clips per person instead of per record, so your k sessions together count once. At the same sampling rate and noise, your budget equals the stated one, whatever k is. The cost is accuracy, which the project measures.</p>
+  </section>
+
+  <footer>Part of the proposal "Per-person privacy receipts for longitudinal imaging in health twins", FHNW HSW, for the Open Science Foundation open call 2026/27. Method: Mironov, Talwar, Zhang (2019) for the subsampled Gaussian; Balle et al. (2020) for the conversion to (ε, δ). Everything runs in your browser; nothing is sent anywhere. <a href="accountant.js">Accountant source</a> · <a href="LICENSE">Apache-2.0</a>.</footer>
+</div>
+
+<script src="accountant.js"></script>
+<script>
+(() => {
+  const { epsilon, personEpsilon: personEps } = window.PrivacyAccountant;
+
+  const $ = id => document.getElementById(id);
+  const sup = n => String(n).split('').map(ch => '⁰¹²³⁴⁵⁶⁷⁸⁹'['0123456789'.indexOf(ch)] || ch).join('');
+  const fmtEps = e => {
+    if (!isFinite(e)) return '∞';
+    if (e < 10) return e.toFixed(2);
+    if (e < 1e7) return Math.round(e).toLocaleString('en-US');
+    const p = Math.floor(Math.log10(e));
+    return (e / 10 ** p).toFixed(1) + '×10' + sup(p);
+  };
+  const tpr = (e, d) => { const v = Math.min(1, Math.exp(Math.min(e, 50)) * 0.01 + d); return v >= 0.995 ? '100%' : (v * 100 < 10 ? (v * 100).toFixed(1) : Math.round(v * 100)) + '%'; };
+
+  function read() {
+    const q = +$('q').value / 100, sigma = +$('sigma').value, epochs = +$('epochs').value;
+    const delta = 10 ** -(+$('delta').value), k = +$('k').value;
+    return { q, sigma, epochs, delta, k, steps: Math.round(epochs / q) };
+  }
+
+  function drawChart(s, rec, series) {
+    const svg = $('chart');
+    const W = 760, H = 300, L = 70, R = 24, T = 20, B = 46;
+    const ys = series.map(d => Math.max(d.e, 1e-2));
+    const lo = Math.floor(Math.log10(Math.max(Math.min(rec, ...ys), 1e-2)));
+    const hi = Math.ceil(Math.log10(Math.max(rec, ...ys) * 1.05));
+    const top = Math.max(hi, lo + 1);
+    const X = k => L + (k - 1) / 15 * (W - L - R);
+    const Y = e => T + (top - Math.log10(Math.max(e, 10 ** lo))) / (top - lo) * (H - T - B);
+    const css = getComputedStyle(document.documentElement);
+    const c = n => css.getPropertyValue(n).trim();
+    let out = '';
+    const step = Math.max(1, Math.ceil((top - lo) / 6));
+    for (let p = lo; p <= top; p += step) {
+      const y = Y(10 ** p);
+      out += `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="${c('--rule')}" stroke-width="1"/>`;
+      const lab = p >= 0 && p <= 3 ? String(10 ** p) : p < 0 ? (10 ** p).toFixed(-p) : '10' + sup(p);
+      out += `<text x="${L - 10}" y="${y + 4}" text-anchor="end" font-size="12" fill="${c('--muted')}">${lab}</text>`;
+    }
+    for (const k of [1, 2, 4, 6, 8, 10, 12, 14, 16]) out += `<text x="${X(k)}" y="${H - B + 20}" text-anchor="middle" font-size="12" fill="${c('--muted')}">${k}</text>`;
+    out += `<text x="${(L + W - R) / 2}" y="${H - 6}" text-anchor="middle" font-size="12" fill="${c('--muted')}">sessions per person, k</text>`;
+    out += `<text x="16" y="${T + (H - T - B) / 2}" text-anchor="middle" font-size="12" fill="${c('--muted')}" transform="rotate(-90 16 ${T + (H - T - B) / 2})">ε (log scale)</text>`;
+    out += `<line x1="${L}" x2="${W - R}" y1="${Y(rec)}" y2="${Y(rec)}" stroke="${c('--accent')}" stroke-width="2.5"/>`;
+    const path = series.map((d, i) => `${i ? 'L' : 'M'}${X(d.k).toFixed(1)} ${Y(d.e).toFixed(1)}`).join(' ');
+    out += `<path d="${path}" fill="none" stroke="${c('--warn')}" stroke-width="2.5" stroke-linejoin="round"/>`;
+    const cur = series.find(d => d.k === s.k);
+    out += `<line x1="${X(s.k)}" x2="${X(s.k)}" y1="${T}" y2="${H - B}" stroke="${c('--muted')}" stroke-dasharray="3 4"/>`;
+    out += `<circle cx="${X(s.k)}" cy="${Y(cur.e)}" r="5.5" fill="${c('--warn')}" stroke="${c('--surface')}" stroke-width="2"/>`;
+    out += `<circle cx="${X(s.k)}" cy="${Y(rec)}" r="5.5" fill="${c('--accent')}" stroke="${c('--surface')}" stroke-width="2"/>`;
+    const anchor = s.k > 12 ? 'end' : 'start', dx = s.k > 12 ? -10 : 10;
+    const close = Y(rec) - Y(cur.e) < 34;
+    const wy = close ? Y(rec) - 14 : Math.min(Y(cur.e) + 22, Y(rec) - 14);
+    out += `<text x="${X(s.k) + dx}" y="${wy}" text-anchor="${anchor}" font-size="12.5" font-weight="600" fill="${c('--warn')}">ε ≤ ${fmtEps(cur.e)}</text>`;
+    out += `<text x="${X(s.k) + dx}" y="${Y(rec) + 20}" text-anchor="${anchor}" font-size="12.5" font-weight="600" fill="${c('--accent')}">ε = ${fmtEps(rec)}</text>`;
+    svg.innerHTML = out;
+  }
+
+  function update() {
+    const s = read();
+    $('k-out').textContent = s.k;
+    $('q-out').textContent = (s.q * 100).toFixed(1) + '%';
+    $('sigma-out').textContent = s.sigma.toFixed(2);
+    $('epochs-out').textContent = s.epochs;
+    $('delta-out').textContent = '1e-' + $('delta').value;
+    $('steps').textContent = s.steps.toLocaleString('en-US') + ' training steps';
+
+    const rec = epsilon(s.q, s.sigma, s.steps, s.delta);
+    const series = [];
+    for (let k = 1; k <= 16; k++) series.push({ k, e: personEps(s.q, s.sigma, s.steps, s.delta, k) });
+    const pe = series[s.k - 1].e;
+
+    $('r-k').textContent = s.k;
+    $('r-k2').textContent = '× ' + s.k;
+    $('r-rec').textContent = 'ε = ' + fmtEps(rec);
+    $('r-rec-tpr').textContent = tpr(rec, s.delta);
+    $('r-p').textContent = ((1 - Math.pow(1 - s.q, s.k)) * 100).toFixed(1) + '%';
+    $('r-seff').textContent = 'σ/k = ' + (s.sigma / s.k).toFixed(2);
+    $('r-person').textContent = 'ε ≤ ' + fmtEps(pe);
+    $('r-person').className = pe > rec * 1.01 ? 'warn' : 'ok';
+    $('r-person-tpr').textContent = tpr(pe, s.delta);
+    $('r-user').textContent = 'ε = ' + fmtEps(rec);
+    $('r-user-tpr').textContent = tpr(rec, s.delta);
+    drawChart(s, rec, series);
+  }
+
+  ['k', 'q', 'sigma', 'epochs', 'delta'].forEach(id => $(id).addEventListener('input', update));
+  const mq = window.matchMedia('(prefers-color-scheme: dark)');
+  if (mq.addEventListener) mq.addEventListener('change', update);
+  new MutationObserver(update).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  update();
+})();
+</script>
+</body>
+</html>
